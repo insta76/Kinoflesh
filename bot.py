@@ -1,7 +1,11 @@
 import asyncio
+import os
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, CommandStart
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    ReplyKeyboardMarkup, KeyboardButton,
+    InlineKeyboardMarkup, InlineKeyboardButton
+)
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
@@ -10,11 +14,17 @@ from database import (
     channels_col, admins_col, MAIN_ADMIN_ID
 )
 
-BOT_TOKEN = "8450474807:AAGWPcYkRSWbXAN79sg7Nj2nWyP1oiohER8"
+# Token va MongoDB URI — environment variables orqali olinadi
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+MONGO_URI = os.getenv("MONGO_URI")
+
+if not BOT_TOKEN or not MONGO_URI:
+    raise ValueError("BOT_TOKEN yoki MONGO_URI muhit o'zgaruvchisi mavjud emas!")
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Holatlar
+# === FSM HOLATLAR ===
 class AddChannel(StatesGroup):
     waiting_for_channel = State()
 
@@ -30,15 +40,19 @@ class AddAdmin(StatesGroup):
 class RemoveAdmin(StatesGroup):
     waiting_for_id = State()
 
-class ApproveVideo(StatesGroup):
-    waiting_for_code = State()
-
 class AddSerial(StatesGroup):
     waiting_for_code = State()
     waiting_for_title = State()
     waiting_for_parts = State()
 
-# Asosiy menyu tugmalar
+class SearchState(StatesGroup):
+    searching = State()
+
+class UserVideoState(StatesGroup):
+    waiting_video = State()
+
+
+# === KLAVIATURALAR ===
 def main_menu():
     kb = [
         [KeyboardButton(text="🎬 Kino qidirish")],
@@ -60,12 +74,12 @@ def back_button():
     kb = [[KeyboardButton(text="🔙 Orqaga")]]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-# Foydalanuvchini bazaga qo'shish
+
+# === YORDAMCHI FUNKSIYALAR ===
 async def add_user(user_id: int, username: str = None):
     if not users_col.find_one({"user_id": user_id}):
         users_col.insert_one({"user_id": user_id, "username": username})
 
-# Obuna majburiymi?
 async def check_subscription(user_id: int) -> bool:
     channels = list(channels_col.find({}))
     if not channels:
@@ -79,24 +93,16 @@ async def check_subscription(user_id: int) -> bool:
             return False
     return True
 
-# Barcha tugmalarga "Orqaga" qo'shish
-@dp.message()
-async def handle_back(message: types.Message, state: FSMContext):
-    if message.text == "🔙 Orqaga":
-        await state.clear()
-        await message.answer("Asosiy menyu:", reply_markup=main_menu())
 
-# /start
+# === BOSHLANG'ICH /START HANDLER ===
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     username = message.from_user.username
     await add_user(user_id, username)
 
-    # Adminmi?
     is_admin = admins_col.find_one({"user_id": user_id}) is not None
 
-    # Obuna tekshirish
     if not await check_subscription(user_id):
         channels = channels_col.find({})
         text = "Quyidagi kanallarga obuna bo'ling:\n\n"
@@ -122,7 +128,8 @@ async def start_handler(message: types.Message, state: FSMContext):
     else:
         await message.answer(welcome_text, reply_markup=main_menu())
 
-# Obuna tekshirish (callback)
+
+# === OBUNA TEKSHIRISH ===
 @dp.callback_query(lambda c: c.data == "check_sub")
 async def check_sub_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -132,13 +139,14 @@ async def check_sub_callback(callback: types.CallbackQuery):
     else:
         await callback.answer("❌ Hali ham kanallarga obuna bo'lmagansiz!", show_alert=True)
 
-# Kino qidirish
+
+# === KINO QIDIRISH ===
 @dp.message(lambda m: m.text == "🎬 Kino qidirish")
 async def search_video(message: types.Message, state: FSMContext):
+    await state.set_state(SearchState.searching)
     await message.answer("Kino/serial nomi yoki kodini kiriting:", reply_markup=back_button())
-    await state.set_state("searching")
 
-@dp.message(lambda m: m.text and "searching" in str(m))
+@dp.message(SearchState.searching)
 async def process_search(message: types.Message, state: FSMContext):
     if message.text == "🔙 Orqaga":
         await state.clear()
@@ -146,7 +154,6 @@ async def process_search(message: types.Message, state: FSMContext):
         return
 
     query = message.text.strip()
-    # Kod yoki nom bo'yicha qidirish
     video = approved_videos_col.find_one({"$or": [{"code": query}, {"title": {"$regex": query, "$options": "i"}}]})
     if video:
         if video.get("is_serial"):
@@ -168,10 +175,10 @@ async def process_search(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Asosiy menyu:", reply_markup=main_menu())
 
-# Top kinolar
+
+# === TOP KINOLAR ===
 @dp.message(lambda m: m.text == "🏆 Top kinolar")
 async def top_videos(message: types.Message):
-    # Soddalashtirish uchun: ko'proq ko'rilgan 10 ta
     top_list = approved_videos_col.find().sort("views", -1).limit(10)
     text = "🏆 Top 10 kinolar:\n\n"
     for i, v in enumerate(top_list, 1):
@@ -182,23 +189,22 @@ async def top_videos(message: types.Message):
         text = "Hali hech qanday kino qo'shilmagan."
     await message.answer(text)
 
-# Foydalanuvchi kinoni yuborish
-@dp.message(lambda m: m.text == "📤 Kino yuborish")
-async def send_video_request(message: types.Message):
-    await message.answer("Kino/serialni shu botga yuboring (video sifatida):", reply_markup=back_button())
-    await state.set_state("waiting_video_from_user")
 
-@dp.message()
+# === FOYDALANUVCHI KINO YUBORISH ===
+@dp.message(lambda m: m.text == "📤 Kino yuborish")
+async def send_video_request(message: types.Message, state: FSMContext):
+    await state.set_state(UserVideoState.waiting_video)
+    await message.answer("Kino/serialni shu botga yuboring (video sifatida):", reply_markup=back_button())
+
+@dp.message(UserVideoState.waiting_video)
 async def receive_user_video(message: types.Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state == "waiting_video_from_user" and message.video:
-        # ... ishni bajarish
-        await state.clear()
-async def receive_user_video(message: types.Message, state: FSMContext):
-    video = message.video
+    if not message.video:
+        await message.answer("Faqat video yuboring!")
+        return
+
     pending_videos_col.insert_one({
         "user_id": message.from_user.id,
-        "video_file_id": video.file_id,
+        "video_file_id": message.video.file_id,
         "caption": message.caption or "",
         "chat_id": message.chat.id,
         "message_id": message.message_id,
@@ -208,11 +214,12 @@ async def receive_user_video(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Asosiy menyu:", reply_markup=main_menu())
 
-# Adminga yozish
+
+# === ADMINGA YOZISH ===
 @dp.message(lambda m: m.text == "✍️ Adminga yozish")
 async def contact_admin(message: types.Message, state: FSMContext):
-    await message.answer("Xabaringizni yozing:", reply_markup=back_button())
     await state.set_state(SendMessageToAdmin.waiting_for_message)
+    await message.answer("Xabaringizni yozing:", reply_markup=back_button())
 
 @dp.message(SendMessageToAdmin.waiting_for_message)
 async def forward_to_admin(message: types.Message, state: FSMContext):
@@ -226,12 +233,13 @@ async def forward_to_admin(message: types.Message, state: FSMContext):
     try:
         await bot.send_message(admin_id, text)
         await message.answer("✅ Xabaringiz adminlarga yuborildi!")
-    except:
+    except Exception as e:
         await message.answer("❌ Xabar yuborishda xatolik.")
     await state.clear()
     await message.answer("Asosiy menyu:", reply_markup=main_menu())
 
-# Statistika
+
+# === STATISTIKA ===
 @dp.message(lambda m: m.text == "📊 Statistika")
 async def stats(message: types.Message):
     total = users_col.count_documents({})
@@ -239,7 +247,8 @@ async def stats(message: types.Message):
     pending = pending_videos_col.count_documents({"status": "pending"})
     await message.answer(f"👤 Foydalanuvchilar: {total}\n🎥 Tasdiqlangan kinolar: {videos}\n⏳ Kutayotgan: {pending}")
 
-# Admin panel
+
+# === ADMIN PANEL ===
 @dp.message(lambda m: m.text == "👑 Admin panel")
 async def admin_panel(message: types.Message):
     if not admins_col.find_one({"user_id": message.from_user.id}):
@@ -247,7 +256,8 @@ async def admin_panel(message: types.Message):
         return
     await message.answer("Admin panel:", reply_markup=admin_menu())
 
-# Admin: Kino qo'shish
+
+# === ADMIN: KINO QO'SHISH ===
 @dp.message(lambda m: m.text == "🆕 Kino qo'shish")
 async def admin_add_movie(message: types.Message):
     if not admins_col.find_one({"user_id": message.from_user.id}):
@@ -256,7 +266,6 @@ async def admin_add_movie(message: types.Message):
 
 @dp.message(lambda m: m.video and admins_col.find_one({"user_id": m.from_user.id}))
 async def save_admin_video(message: types.Message):
-    video = message.video
     code = str(approved_videos_col.count_documents({}) + 1).zfill(4)
     approved_videos_col.insert_one({
         "code": code,
@@ -268,13 +277,14 @@ async def save_admin_video(message: types.Message):
     })
     await message.answer(f"✅ Kino qo'shildi!\nKod: {code}")
 
-# Serial qo'shish
+
+# === SERIAL QO'SHISH ===
 @dp.message(lambda m: m.text == "📺 Serial qo'shish")
 async def start_add_serial(message: types.Message, state: FSMContext):
     if not admins_col.find_one({"user_id": message.from_user.id}):
         return
-    await message.answer("Serial kodini kiriting (masalan: S001):", reply_markup=back_button())
     await state.set_state(AddSerial.waiting_for_code)
+    await message.answer("Serial kodini kiriting (masalan: S001):", reply_markup=back_button())
 
 @dp.message(AddSerial.waiting_for_code)
 async def serial_code(message: types.Message, state: FSMContext):
@@ -289,8 +299,11 @@ async def serial_title(message: types.Message, state: FSMContext):
     await state.update_data(parts=[])
     await state.set_state(AddSerial.waiting_for_parts)
 
-@dp.message(AddSerial.waiting_for_parts, content_types=types.ContentType.VIDEO)
+@dp.message(AddSerial.waiting_for_parts)
 async def serial_part(message: types.Message, state: FSMContext):
+    if not message.video:
+        await message.answer("Faqat video yuboring!")
+        return
     data = await state.get_data()
     parts = data.get("parts", [])
     parts.append({
@@ -320,13 +333,14 @@ async def finish_serial(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Admin panel:", reply_markup=admin_menu())
 
-# Xabar yuborish (broadcast)
+
+# === BROADCAST (XABAR YUBORISH) ===
 @dp.message(lambda m: m.text == "📢 Xabar yuborish")
 async def broadcast_start(message: types.Message, state: FSMContext):
     if not admins_col.find_one({"user_id": message.from_user.id}):
         return
-    await message.answer("Xabarni yozing (matn, video, rasm — istalgan formatda):", reply_markup=back_button())
     await state.set_state(BroadcastMessage.waiting_for_message)
+    await message.answer("Xabarni yozing (matn, video, rasm — istalgan formatda):", reply_markup=back_button())
 
 @dp.message(BroadcastMessage.waiting_for_message)
 async def do_broadcast(message: types.Message, state: FSMContext):
@@ -346,7 +360,8 @@ async def do_broadcast(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Admin panel:", reply_markup=admin_menu())
 
-# Majburiy kanallar
+
+# === MAJBURIY KANALLAR ===
 @dp.message(lambda m: m.text == "🔍 Majburiy kanallar")
 async def manage_channels(message: types.Message):
     if not admins_col.find_one({"user_id": message.from_user.id}):
@@ -360,8 +375,8 @@ async def manage_channels(message: types.Message):
 
 @dp.message(lambda m: m.text == "➕ Kanal qo'shish")
 async def add_channel_start(message: types.Message, state: FSMContext):
-    await message.answer("Kanal linkini yoki ID sini yuboring (masalan: @mychannel yoki -1001234567890):")
     await state.set_state(AddChannel.waiting_for_channel)
+    await message.answer("Kanal linkini yoki ID sini yuboring (masalan: @mychannel yoki -1001234567890):")
 
 @dp.message(AddChannel.waiting_for_channel)
 async def add_channel_finish(message: types.Message, state: FSMContext):
@@ -382,9 +397,15 @@ async def add_channel_finish(message: types.Message, state: FSMContext):
     await state.clear()
     await manage_channels(message)
 
-# Boshqa admin boshqaruvi, statistika va h.k. qo'shilgan
 
-# Asosiy ishga tushirish
+# === "ORQAGA" TUGMASI — OXIRDA BO'LISHI KERAK! ===
+@dp.message(lambda m: m.text == "🔙 Orqaga")
+async def go_back(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Asosiy menyu:", reply_markup=main_menu())
+
+
+# === ISHGA TUSHIRISH ===
 async def main():
     await dp.start_polling(bot)
 
