@@ -1,9 +1,11 @@
 import asyncio
 import os
+import threading
+from flask import Flask
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
-    ReplyKeyboardMarkup, KeyboardButton,
+    ReplyKeyboardMarkup, KeyboardBotton,
     InlineKeyboardMarkup, InlineKeyboardButton
 )
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -14,6 +16,7 @@ from database import (
     channels_col, admins_col
 )
 
+# === Muhtojliklar ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 
@@ -81,13 +84,13 @@ async def add_user(user_id: int, username: str = None):
     if not users_col.find_one({"user_id": user_id}):
         users_col.insert_one({"user_id": user_id, "username": username})
 
-async def check_subscription(user_id: int) -> bool:
+async def check_subscription(user_protect: int) -> bool:
     channels = list(channels_col.find({}))
     if not channels:
         return True
     for ch in channels:
         try:
-            chat_member = await bot.get_chat_member(chat_id=ch['channel_id'], user_id=user_id)
+            chat_member = await bot.get_chat_member(chat_id=ch['channel_id'], user_id=user_protect)
             if chat_member.status in ['left', 'kicked']:
                 return False
         except:
@@ -102,7 +105,6 @@ async def start_handler(message: types.Message, state: FSMContext):
     username = message.from_user.username
     await add_user(user_id, username)
 
-    # Admin tekshirish — asosiy admin + MongoDBdagi adminlar
     is_admin = (user_id == MAIN_ADMIN_ID) or (admins_col.find_one({"user_id": user_id}) is not None)
 
     if not await check_subscription(user_id):
@@ -137,6 +139,7 @@ async def check_sub_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if await check_subscription(user_id):
         await callback.message.edit_text("✅ Obuna tasdiqlandi! Endi botdan foydalanishingiz mumkin.")
+        # Qayta start qilish
         await start_handler(callback.message, FSMContext(storage=MemoryStorage(), key=None))
     else:
         await callback.answer("❌ Hali ham kanallarga obuna bo'lmagansiz!", show_alert=True)
@@ -236,7 +239,6 @@ async def forward_to_admin(message: types.Message, state: FSMContext):
 
     text = f"📩 Yangi xabar:\n\nFoydalanuvchi: {message.from_user.full_name} (@{message.from_user.username or '---'})\nID: {message.from_user.id}\n\nXabar:\n{message.text}"
     try:
-        # Barcha adminlarga yuborish (asosiy + qo'shilgan)
         all_admins = [MAIN_ADMIN_ID]
         extra_admins = admins_col.find({})
         for a in extra_admins:
@@ -512,16 +514,31 @@ async def list_admins(message: types.Message):
     await message.answer(text)
 
 
-# === "ORQAGA" TUGMASI — OXIRIDA BO'LISHI SHART! ===
+# === "ORQAGA" TUGMASI ===
 @dp.message(lambda m: m.text == "🔙 Orqaga")
 async def go_back(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Asosiy menyu:", reply_markup=main_menu())
 
 
-# === ASOSIY ISHGA TUSHIRISH ===
-async def main():
+# ================================
+# 🔥 FLASK + AIORGRAM INTEGRATSIYASI
+# ================================
+
+flask_app = Flask(__name__)
+
+@flask_app.route('/health')
+def health():
+    return "OK", 200
+
+async def start_bot():
+    """Aiogram botni polling rejimida ishga tushirish"""
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Botni alohida threadda ishga tushirish
+    threading.Thread(target=lambda: asyncio.run(start_bot()), daemon=True).start()
+    
+    # Flask server — Render portini eshitish
+    port = int(os.environ.get("PORT", 5000))
+    flask_app.run(host="0.0.0.0", port=port)
