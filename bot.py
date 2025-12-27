@@ -362,37 +362,52 @@ async def serial_part(message: types.Message, state: FSMContext):
     })
     await state.update_data(parts=parts)
     await message.answer(f"✅ Qism qo'shildi. Hozircha {len(parts)} ta qism.")
-@dp.message_handler(state=AddSerial.waiting_for_serial, content_types=["text"])
-async def finish_serial(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    code = data["code"]
-    title = data["title"]
-    parts = data["parts"]
-    if not parts:
-        await message.answer("Hech qanday qism yuborilmadi!")
-        return
-    approved_videos_col.insert_one({
-        "code": code,
-        "title": title,
-        "is_serial": True,
-        "parts": parts,
-        "views": 0
-    })
-    base_channel = get_base_channel()
-    if base_channel:
-        try:
-            last_part = parts[-1]
-            await bot.copy_message(
-                chat_id=base_channel,
-                from_chat_id=last_part["chat_id"],
-                message_id=last_part["message_id"],
-                caption=f"✅ Serial qo'shildi!\n{title}\nKod: {code}"
-            )
-        except Exception as e:
-            print(f"Baza kanalga serial xato: {e}")
-    await message.answer(f"✅ Serial qo'shildi!\nKod: {code}")
-    await state.finish()
-    await message.answer("Admin panel:", reply_markup=admin_menu())
+@dp.message_handler(state=AddSerial.waiting_for_parts, content_types=types.ContentTypes.ANY)
+async def handle_serial_parts_or_finish(message: types.Message, state: FSMContext):
+    if message.content_type == "text":
+        if message.text.strip() == "✅ Yakunlandi":
+            data = await state.get_data()
+            parts = data.get("parts", [])
+            if not parts:
+                await message.answer("Hech qanday qism yuborilmadi!")
+                return
+            code = data["code"]
+            title = data["title"]
+            approved_videos_col.insert_one({
+                "code": code,
+                "title": title,
+                "is_serial": True,
+                "parts": parts,
+                "views": 0
+            })
+            base_channel = get_base_channel()
+            if base_channel:
+                try:
+                    last_part = parts[-1]
+                    await bot.copy_message(
+                        chat_id=base_channel,
+                        from_chat_id=last_part["chat_id"],
+                        message_id=last_part["message_id"],
+                        caption=f"✅ Serial qo'shildi!\n{title}\nKod: {code}"
+                    )
+                except Exception as e:
+                    print(f"Baza kanalga serial xato: {e}")
+            await message.answer(f"✅ Serial qo'shildi!\nKod: {code}")
+            await state.finish()
+            await message.answer("Admin panel:", reply_markup=admin_menu())
+        else:
+            await message.answer("Faqat '✅ Yakunlandi' deb yozing yoki video yuboring.")
+    elif message.content_type == "video":
+        data = await state.get_data()
+        parts = data.get("parts", [])
+        parts.append({
+            "chat_id": message.chat.id,
+            "message_id": message.message_id
+        })
+        await state.update_data(parts=parts)
+        await message.answer(f"✅ Qism qo'shildi. Hozircha {len(parts)} ta qism.")
+    else:
+        await message.answer("Faqat video yoki '✅ Yakunlandi' matnini yuboring.")
 
 @dp.message_handler(state=AddSerial.waiting_for_parts)
 async def not_video_serial(message: types.Message):
