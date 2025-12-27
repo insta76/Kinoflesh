@@ -6,7 +6,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton
 )
-from aiogram.fism.storage.memory import MemoryStorage
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fism.state import State, StatesGroup
 from aiogram.fism.context import FSMContext
 from database import (
