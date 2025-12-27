@@ -1,4 +1,3 @@
 aiogram==2.25.1
 Flask==2.3.3
 pymongo==4.8.0
-requests==2.31.0
