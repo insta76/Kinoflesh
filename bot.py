@@ -14,8 +14,20 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 # Database
 from database import (
     users_col, pending_videos_col, approved_videos_col,
-    channels_col, admins_col
+    channels_col, admins_col, settings_col  # ✅ settings_col qo'shildi
 )
+
+# === Yordamchi funksiyalar ===
+def get_base_channel():
+    setting = settings_col.find_one({"key": "base_channel"})
+    return setting["value"] if setting else None
+
+def set_base_channel(channel_id):
+    settings_col.update_one(
+        {"key": "base_channel"},
+        {"$set": {"value": channel_id}},
+        upsert=True
+    )
 
 # === Muhtojliklar ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -70,8 +82,9 @@ def admin_menu():
     kb = [
         [KeyboardButton(text="🆕 Kino qo'shish"), KeyboardButton(text="📺 Serial qo'shish")],
         [KeyboardButton(text="📢 Xabar yuborish"), KeyboardButton(text="🔍 Majburiy kanallar")],
-        [KeyboardButton(text="👑 Admin qo'shish"), KeyboardButton(text="🗑 Admin o'chirish")],
-        [KeyboardButton(text="📋 Adminlar"), KeyboardButton(text="🔙 Orqaga")]
+        [KeyboardButton(text="📡 Baza kanal"), KeyboardButton(text="👑 Admin qo'shish")],
+        [KeyboardButton(text="🗑 Admin o'chirish"), KeyboardButton(text="📋 Adminlar")],
+        [KeyboardButton(text="🔙 Orqaga")]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -272,6 +285,49 @@ async def admin_panel(message: types.Message):
     await message.answer("Admin panel:", reply_markup=admin_menu())
 
 
+# ✅ BAZA KANAL BOSHQARUVI
+@dp.message_handler(lambda m: m.text == "📡 Baza kanal")
+async def manage_base_channel(message: types.Message):
+    user_id = message.from_user.id
+    is_admin = (user_id == MAIN_ADMIN_ID) or (admins_col.find_one({"user_id": user_id}) is not None)
+    if not is_admin:
+        return
+
+    kb = [
+        [KeyboardButton(text="➕ Baza kanal qo'shish")],
+        [KeyboardButton(text="➖ Baza kanalni olib tashlash")],
+        [KeyboardButton(text="🔙 Orqaga")]
+    ]
+    await message.answer("Baza kanal boshqaruvi:", reply_markup=ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
+
+@dp.message_handler(lambda m: m.text == "➕ Baza kanal qo'shish")
+async def add_base_channel_start(message: types.Message):
+    if message.from_user.id != MAIN_ADMIN_ID:
+        return
+    await message.answer("Baza kanal ID yoki username yuboring (masalan: @mybasechannel yoki -1001234567890):")
+
+@dp.message_handler(lambda m: m.text.startswith("@") or (m.text.lstrip("-").isdigit() and len(m.text) > 5))
+async def add_base_channel_finish(message: types.Message):
+    if message.from_user.id != MAIN_ADMIN_ID:
+        return
+
+    ch_input = message.text.strip()
+    try:
+        chat = await bot.get_chat(ch_input)
+        channel_id = str(chat.id)
+        set_base_channel(channel_id)
+        await message.answer(f"✅ Baza kanal sozlandi: {chat.title}")
+    except Exception as e:
+        await message.answer(f"❌ Xatolik: {e}")
+
+@dp.message_handler(lambda m: m.text == "➖ Baza kanalni olib tashlash")
+async def remove_base_channel(message: types.Message):
+    if message.from_user.id != MAIN_ADMIN_ID:
+        return
+    settings_col.delete_one({"key": "base_channel"})
+    await message.answer("✅ Baza kanal o'chirildi.")
+
+
 # === ADMIN: KINO QO'SHISH (video qabul qilish) ===
 @dp.message_handler(lambda m: m.text == "🆕 Kino qo'shish")
 async def admin_add_movie(message: types.Message):
@@ -287,15 +343,32 @@ async def save_admin_video(message: types.Message):
     is_admin = (user_id == MAIN_ADMIN_ID) or (admins_col.find_one({"user_id": user_id}) is not None)
     if not is_admin:
         return
+
     code = str(approved_videos_col.count_documents({}) + 1).zfill(4)
+    title = message.caption or f"Kino #{code}"
+
     approved_videos_col.insert_one({
         "code": code,
-        "title": message.caption or f"Kino #{code}",
+        "title": title,
         "chat_id": message.chat.id,
         "message_id": message.message_id,
         "is_serial": False,
         "views": 0
     })
+
+    # ✅ Baza kanalga avtomatik yuborish
+    base_channel = get_base_channel()
+    if base_channel:
+        try:
+            await bot.copy_message(
+                chat_id=base_channel,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id,
+                caption=f"✅ {title}\n\nKod: {code}"
+            )
+        except Exception as e:
+            print(f"Baza kanalga yuborishda xato: {e}")
+
     await message.answer(f"✅ Kino qo'shildi!\nKod: {code}")
 
 
@@ -342,6 +415,7 @@ async def finish_serial(message: types.Message, state: FSMContext):
     if not parts:
         await message.answer("Hech qanday qism yuborilmadi!")
         return
+
     approved_videos_col.insert_one({
         "code": code,
         "title": title,
@@ -349,6 +423,21 @@ async def finish_serial(message: types.Message, state: FSMContext):
         "parts": parts,
         "views": 0
     })
+
+    # ✅ Baza kanalga serial oxirgi qismi
+    base_channel = get_base_channel()
+    if base_channel:
+        try:
+            last_part = parts[-1]
+            await bot.copy_message(
+                chat_id=base_channel,
+                from_chat_id=last_part["chat_id"],
+                message_id=last_part["message_id"],
+                caption=f"✅ Serial qo'shildi!\n{title}\nKod: {code}"
+            )
+        except Exception as e:
+            print(f"Baza kanalga serial yuborishda xato: {e}")
+
     await message.answer(f"✅ Serial qo'shildi!\nKod: {code}")
     await state.finish()
     await message.answer("Admin panel:", reply_markup=admin_menu())
@@ -531,14 +620,10 @@ def health():
     return "OK", 200
 
 def start_bot():
-    """Aiogram 2.x polling (async emas, chunki threadingda ishlatiladi)"""
     from aiogram import executor
     executor.start_polling(dp, skip_updates=True)
 
 if __name__ == "__main__":
-    # Botni alohida threadda ishga tushirish
     threading.Thread(target=start_bot, daemon=True).start()
-    
-    # Flask server — Render portini eshitish
     port = int(os.environ.get("PORT", 5000))
     flask_app.run(host="0.0.0.0", port=port)
