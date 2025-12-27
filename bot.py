@@ -90,6 +90,7 @@ async def add_user(user_id: int, username: str = None):
         users_col.insert_one({"user_id": user_id, "username": username})
 
 async def check_subscription(user_id: int) -> bool:
+async def check_subscription(user_id: int) -> bool:
     channels = list(channels_col.find({}))
     if not channels:
         return True
@@ -98,8 +99,9 @@ async def check_subscription(user_id: int) -> bool:
             chat_member = await bot.get_chat_member(chat_id=ch['channel_id'], user_id=user_id)
             if chat_member.status in ['left', 'kicked']:
                 return False
-        except:
-            return False
+        except Exception as e:
+            print(f"❌ Kanal tekshirishda xato (ID: {ch.get('channel_id')}): {e}")  # Xatoni ko'rsatish
+            return False  # Yoki True qaytarish — test qilishga qarab
     return True
 
 @dp.message_handler(commands=['start'])
