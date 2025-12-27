@@ -188,7 +188,12 @@ async def send_video_request(message: types.Message):
     await message.answer("Kino/serialni shu botga yuboring (video sifatida):", reply_markup=back_button())
     await state.set_state("waiting_video_from_user")
 
-@dp.message(state="waiting_video_from_user", content_types=types.ContentType.VIDEO)
+@dp.message()
+async def receive_user_video(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state == "waiting_video_from_user" and message.video:
+        # ... ishni bajarish
+        await state.clear()
 async def receive_user_video(message: types.Message, state: FSMContext):
     video = message.video
     pending_videos_col.insert_one({
