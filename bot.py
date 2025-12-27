@@ -564,7 +564,10 @@ def health():
     return "OK", 200
 
 def start_bot():
+    import asyncio
     from aiogram import executor
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     executor.start_polling(dp, skip_updates=True)
 
 if __name__ == "__main__":
