@@ -20,3 +20,4 @@ MAIN_ADMIN_ID = 7162630033
 # Asosiy adminni qo'shish (bir marta)
 if not admins_col.find_one({"user_id": MAIN_ADMIN_ID}):
     admins_col.insert_one({"user_id": MAIN_ADMIN_ID})
+settings_col = db["settings"]
