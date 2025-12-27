@@ -363,8 +363,7 @@ async def serial_part(message: types.Message, state: FSMContext):
     })
     await state.update_data(parts=parts)
     await message.answer(f"✅ Qism qo'shildi. Hozircha {len(parts)} ta qism.")
-
-@dp.message_handler(state=AddSerial.waiting_for_parts, lambda m: m.text == "✅ Yakunlandi")
+@adp.message_handler(state=AddSerial.waiting_for_serial, content_types=["text"])
 async def finish_serial(message: types.Message, state: FSMContext):
     data = await state.get_data()
     code = data["code"]
