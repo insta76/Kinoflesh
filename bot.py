@@ -138,7 +138,7 @@ async def search_video(message: types.Message, state: FSMContext):
     await message.answer("Kino/serial nomi yoki kodini kiriting:", reply_markup=back_button())
     await state.set_state("searching")
 
-@dp.message(lambda m: m.text and "searching" in str(m), state="searching")
+@dp.message(lambda m: m.text and "searching" in str(m), "searching")
 async def process_search(message: types.Message, state: FSMContext):
     if message.text == "🔙 Orqaga":
         await state.clear()
