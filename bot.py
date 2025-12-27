@@ -6,15 +6,14 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton
 )
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.context import FSMContext
+from aiogram.fism.storage.memory import MemoryStorage
+from aiogram.fism.state import State, StatesGroup
+from aiogram.fism.context import FSMContext
 from database import (
     users_col, pending_videos_col, approved_videos_col,
-    channels_col, admins_col, MAIN_ADMIN_ID
+    channels_col, admins_col
 )
 
-# Token va MongoDB URI — environment variables orqali olinadi
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 
@@ -23,6 +22,8 @@ if not BOT_TOKEN or not MONGO_URI:
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
+
+MAIN_ADMIN_ID = 7162630033
 
 # === FSM HOLATLAR ===
 class AddChannel(StatesGroup):
@@ -66,7 +67,7 @@ def admin_menu():
         [KeyboardButton(text="🆕 Kino qo'shish"), KeyboardButton(text="📺 Serial qo'shish")],
         [KeyboardButton(text="📢 Xabar yuborish"), KeyboardButton(text="🔍 Majburiy kanallar")],
         [KeyboardButton(text="👑 Admin qo'shish"), KeyboardButton(text="🗑 Admin o'chirish")],
-        [KeyboardButton(text="🔙 Orqaga")]
+        [KeyboardButton(text="📋 Adminlar"), KeyboardButton(text="🔙 Orqaga")]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -94,14 +95,15 @@ async def check_subscription(user_id: int) -> bool:
     return True
 
 
-# === BOSHLANG'ICH /START HANDLER ===
+# === /START HANDLER ===
 @dp.message(CommandStart())
 async def start_handler(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     username = message.from_user.username
     await add_user(user_id, username)
 
-    is_admin = admins_col.find_one({"user_id": user_id}) is not None
+    # Admin tekshirish — asosiy admin + MongoDBdagi adminlar
+    is_admin = (user_id == MAIN_ADMIN_ID) or (admins_col.find_one({"user_id": user_id}) is not None)
 
     if not await check_subscription(user_id):
         channels = channels_col.find({})
@@ -198,6 +200,10 @@ async def send_video_request(message: types.Message, state: FSMContext):
 
 @dp.message(UserVideoState.waiting_video)
 async def receive_user_video(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state != UserVideoState.waiting_video:
+        return
+
     if not message.video:
         await message.answer("Faqat video yuboring!")
         return
@@ -228,12 +234,21 @@ async def forward_to_admin(message: types.Message, state: FSMContext):
         await message.answer("Asosiy menyu:", reply_markup=main_menu())
         return
 
-    admin_id = MAIN_ADMIN_ID
     text = f"📩 Yangi xabar:\n\nFoydalanuvchi: {message.from_user.full_name} (@{message.from_user.username or '---'})\nID: {message.from_user.id}\n\nXabar:\n{message.text}"
     try:
-        await bot.send_message(admin_id, text)
+        # Barcha adminlarga yuborish (asosiy + qo'shilgan)
+        all_admins = [MAIN_ADMIN_ID]
+        extra_admins = admins_col.find({})
+        for a in extra_admins:
+            if a["user_id"] != MAIN_ADMIN_ID:
+                all_admins.append(a["user_id"])
+        for admin_id in all_admins:
+            try:
+                await bot.send_message(admin_id, text)
+            except:
+                pass
         await message.answer("✅ Xabaringiz adminlarga yuborildi!")
-    except Exception as e:
+    except:
         await message.answer("❌ Xabar yuborishda xatolik.")
     await state.clear()
     await message.answer("Asosiy menyu:", reply_markup=main_menu())
@@ -251,7 +266,9 @@ async def stats(message: types.Message):
 # === ADMIN PANEL ===
 @dp.message(lambda m: m.text == "👑 Admin panel")
 async def admin_panel(message: types.Message):
-    if not admins_col.find_one({"user_id": message.from_user.id}):
+    user_id = message.from_user.id
+    is_admin = (user_id == MAIN_ADMIN_ID) or (admins_col.find_one({"user_id": user_id}) is not None)
+    if not is_admin:
         await message.answer("Siz admin emassiz!")
         return
     await message.answer("Admin panel:", reply_markup=admin_menu())
@@ -260,12 +277,18 @@ async def admin_panel(message: types.Message):
 # === ADMIN: KINO QO'SHISH ===
 @dp.message(lambda m: m.text == "🆕 Kino qo'shish")
 async def admin_add_movie(message: types.Message):
-    if not admins_col.find_one({"user_id": message.from_user.id}):
+    user_id = message.from_user.id
+    is_admin = (user_id == MAIN_ADMIN_ID) or (admins_col.find_one({"user_id": user_id}) is not None)
+    if not is_admin:
         return
     await message.answer("Kino/serialni shu yerga yuboring:")
 
-@dp.message(lambda m: m.video and admins_col.find_one({"user_id": m.from_user.id}))
+@dp.message(lambda m: m.video)
 async def save_admin_video(message: types.Message):
+    user_id = message.from_user.id
+    is_admin = (user_id == MAIN_ADMIN_ID) or (admins_col.find_one({"user_id": user_id}) is not None)
+    if not is_admin:
+        return
     code = str(approved_videos_col.count_documents({}) + 1).zfill(4)
     approved_videos_col.insert_one({
         "code": code,
@@ -281,7 +304,9 @@ async def save_admin_video(message: types.Message):
 # === SERIAL QO'SHISH ===
 @dp.message(lambda m: m.text == "📺 Serial qo'shish")
 async def start_add_serial(message: types.Message, state: FSMContext):
-    if not admins_col.find_one({"user_id": message.from_user.id}):
+    user_id = message.from_user.id
+    is_admin = (user_id == MAIN_ADMIN_ID) or (admins_col.find_one({"user_id": user_id}) is not None)
+    if not is_admin:
         return
     await state.set_state(AddSerial.waiting_for_code)
     await message.answer("Serial kodini kiriting (masalan: S001):", reply_markup=back_button())
@@ -334,10 +359,12 @@ async def finish_serial(message: types.Message, state: FSMContext):
     await message.answer("Admin panel:", reply_markup=admin_menu())
 
 
-# === BROADCAST (XABAR YUBORISH) ===
+# === BROADCAST ===
 @dp.message(lambda m: m.text == "📢 Xabar yuborish")
 async def broadcast_start(message: types.Message, state: FSMContext):
-    if not admins_col.find_one({"user_id": message.from_user.id}):
+    user_id = message.from_user.id
+    is_admin = (user_id == MAIN_ADMIN_ID) or (admins_col.find_one({"user_id": user_id}) is not None)
+    if not is_admin:
         return
     await state.set_state(BroadcastMessage.waiting_for_message)
     await message.answer("Xabarni yozing (matn, video, rasm — istalgan formatda):", reply_markup=back_button())
@@ -364,7 +391,9 @@ async def do_broadcast(message: types.Message, state: FSMContext):
 # === MAJBURIY KANALLAR ===
 @dp.message(lambda m: m.text == "🔍 Majburiy kanallar")
 async def manage_channels(message: types.Message):
-    if not admins_col.find_one({"user_id": message.from_user.id}):
+    user_id = message.from_user.id
+    is_admin = (user_id == MAIN_ADMIN_ID) or (admins_col.find_one({"user_id": user_id}) is not None)
+    if not is_admin:
         return
     kb = [
         [KeyboardButton(text="➕ Kanal qo'shish")],
@@ -375,11 +404,20 @@ async def manage_channels(message: types.Message):
 
 @dp.message(lambda m: m.text == "➕ Kanal qo'shish")
 async def add_channel_start(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    is_admin = (user_id == MAIN_ADMIN_ID) or (admins_col.find_one({"user_id": user_id}) is not None)
+    if not is_admin:
+        return
     await state.set_state(AddChannel.waiting_for_channel)
     await message.answer("Kanal linkini yoki ID sini yuboring (masalan: @mychannel yoki -1001234567890):")
 
 @dp.message(AddChannel.waiting_for_channel)
 async def add_channel_finish(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    is_admin = (user_id == MAIN_ADMIN_ID) or (admins_col.find_one({"user_id": user_id}) is not None)
+    if not is_admin:
+        return
+
     ch_input = message.text.strip()
     try:
         chat = await bot.get_chat(ch_input)
@@ -398,14 +436,90 @@ async def add_channel_finish(message: types.Message, state: FSMContext):
     await manage_channels(message)
 
 
-# === "ORQAGA" TUGMASI — OXIRDA BO'LISHI KERAK! ===
+# === ADMIN QO'SHISH ===
+@dp.message(lambda m: m.text == "👑 Admin qo'shish")
+async def add_admin_start(message: types.Message, state: FSMContext):
+    if message.from_user.id != MAIN_ADMIN_ID:
+        return
+    await message.answer("Yangi admin ID raqamini yuboring:")
+    await state.set_state(AddAdmin.waiting_for_id)
+
+@dp.message(AddAdmin.waiting_for_id)
+async def add_admin_finish(message: types.Message, state: FSMContext):
+    if message.from_user.id != MAIN_ADMIN_ID:
+        return
+
+    try:
+        new_admin_id = int(message.text.strip())
+        if new_admin_id == MAIN_ADMIN_ID:
+            await message.answer("❌ Bu ID asosiy admin!")
+        elif admins_col.find_one({"user_id": new_admin_id}):
+            await message.answer("❌ Bu foydalanuvchi allaqachon admin!")
+        else:
+            admins_col.insert_one({"user_id": new_admin_id})
+            await message.answer(f"✅ Foydalanuvchi {new_admin_id} admin qilindi!")
+    except ValueError:
+        await message.answer("❌ ID faqat raqam bo'lishi kerak. Qaytadan urinib ko'ring.")
+    
+    await state.clear()
+    await message.answer("Admin panel:", reply_markup=admin_menu())
+
+
+# === ADMIN O'CHIRISH ===
+@dp.message(lambda m: m.text == "🗑 Admin o'chirish")
+async def remove_admin_start(message: types.Message, state: FSMContext):
+    if message.from_user.id != MAIN_ADMIN_ID:
+        return
+    await message.answer("O'chiriladigan admin ID raqamini yuboring:")
+    await state.set_state(RemoveAdmin.waiting_for_id)
+
+@dp.message(RemoveAdmin.waiting_for_id)
+async def remove_admin_finish(message: types.Message, state: FSMContext):
+    if message.from_user.id != MAIN_ADMIN_ID:
+        return
+
+    try:
+        admin_id_to_remove = int(message.text.strip())
+        if admin_id_to_remove == MAIN_ADMIN_ID:
+            await message.answer("❌ Asosiy adminni o'chirib bo'lmaydi!")
+        else:
+            result = admins_col.delete_one({"user_id": admin_id_to_remove})
+            if result.deleted_count > 0:
+                await message.answer(f"✅ Foydalanuvchi {admin_id_to_remove} adminlikdan chiqarildi.")
+            else:
+                await message.answer("❌ Bunday admin topilmadi.")
+    except ValueError:
+        await message.answer("❌ ID faqat raqam bo'lishi kerak.")
+    
+    await state.clear()
+    await message.answer("Admin panel:", reply_markup=admin_menu())
+
+
+# === ADMINLAR RO'YXATI ===
+@dp.message(lambda m: m.text == "📋 Adminlar")
+async def list_admins(message: types.Message):
+    if message.from_user.id != MAIN_ADMIN_ID:
+        return
+
+    admins = admins_col.find({})
+    text = "👑 Qo'shimcha adminlar:\n\n"
+    count = 0
+    for admin in admins:
+        text += f"• {admin['user_id']}\n"
+        count += 1
+    if count == 0:
+        text = "Hozircha qo'shimcha adminlar yo'q."
+    await message.answer(text)
+
+
+# === "ORQAGA" TUGMASI — OXIRIDA BO'LISHI SHART! ===
 @dp.message(lambda m: m.text == "🔙 Orqaga")
 async def go_back(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("Asosiy menyu:", reply_markup=main_menu())
 
 
-# === ISHGA TUSHIRISH ===
+# === ASOSIY ISHGA TUSHIRISH ===
 async def main():
     await dp.start_polling(bot)
 
