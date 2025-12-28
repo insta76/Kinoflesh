@@ -279,18 +279,21 @@ async def handle_user_video_or_back(message: types.Message, state: FSMContext):
             if uid != MAIN_ADMIN_ID:
                 all_admins.append(uid)
 
-for admin_id in all_admins:
-for admin_id in all_admins:
-    try:
-        # Tugmalar yaratish
-        approve_btn = InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"approve_{message.message_id}_{message.chat.id}")
-        reject_btn = InlineKeyboardButton("❌ Rad etish", callback_data=f"reject_{message.message_id}")
-        keyboard = InlineKeyboardMarkup().add(approve_btn, reject_btn)
+    for admin_id in all_admins:
+        try:
+            # Tugmalar yaratish
+            approve_btn = InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"approve_{message.message_id}_{message.chat.id}")
+            reject_btn = InlineKeyboardButton("❌ Rad etish", callback_data=f"reject_{message.message_id}")
+            keyboard = InlineKeyboardMarkup().add(approve_btn, reject_btn)
 
-        await bot.send_message(
-            admin_id,
-            f"📩 Yangi kino tasdiqlash uchun!\nFoydalanuvchi: {message.from_user.id}",
-            reply_markup=keyboard
+            await bot.send_message(
+                admin_id,
+                f"📩 Yangi kino tasdiqlash uchun!\nFoydalanuvchi: {message.from_user.id}",
+                reply_markup=keyboard
+            )
+            await bot.forward_message(admin_id, message.chat.id, message.message_id)
+        except Exception as e:
+            print(f"Admin {admin_id} ga xabar yuborishda xato: {e}")
         )
         await bot.forward_message(admin_id, message.chat.id, message.message_id)
     except Exception as e:
