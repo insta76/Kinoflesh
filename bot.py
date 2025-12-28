@@ -279,8 +279,8 @@ async def handle_user_video_or_back(message: types.Message, state: FSMContext):
             if uid != MAIN_ADMIN_ID:
                 all_admins.append(uid)
 
-        for admin_id in all_admins:
-        for admin_id in all_admins:
+for admin_id in all_admins:
+for admin_id in all_admins:
     try:
         # Tugmalar yaratish
         approve_btn = InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"approve_{message.message_id}_{message.chat.id}")
