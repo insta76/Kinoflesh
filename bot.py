@@ -807,11 +807,8 @@ async def go_back(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state:
         await state.finish()
-    is_admin = (message.from_user.id == MAIN_ADMIN_ID) or (admins_col.find_one({"user_id": message.from_user.id}) is not None)
-    if is_admin:
-        await message.answer("Admin panel:", reply_markup=admin_menu())
-    else:
-        await message.answer("Asosiy menyu:", reply_markup=main_menu())
+    # ⚠️ Admin paneldan chiqish uchun — har doim asosiy menyu!
+    await message.answer("Asosiy menyu:", reply_markup=main_menu())
 
 # ======================================
 # Flask + Aiogram
