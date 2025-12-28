@@ -804,7 +804,77 @@ async def list_admins(message: types.Message):
     if count == 0:
         text = "Hozircha qo'shimcha adminlar yo'q."
     await message.answer(text)
+# ======================================
+# ✅ Tasdiqlash / ❌ Rad etish
+# ======================================
 
+@dp.callback_query_handler(lambda c: c.data.startswith("approve_"))
+async def approve_video(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    if len(parts) < 3:
+        await callback.answer("Xato ma'lumot!")
+        return
+    try:
+        message_id = int(parts[1])
+        chat_id = int(parts[2])
+    except:
+        await callback.answer("Xato ID!")
+        return
+
+    video_data = pending_videos_col.find_one({
+        "message_id": message_id,
+        "chat_id": chat_id
+    })
+    if not video_
+        await callback.message.edit_text("❌ Video topilmadi yoki allaqachon tasdiqlangan.")
+        return
+
+    code = str(approved_videos_col.count_documents({}) + 1).zfill(4)
+    approved_videos_col.insert_one({
+        "code": code,
+        "title": video_data.get("caption", f"Kino #{code}"),
+        "chat_id": video_data["chat_id"],
+        "message_id": video_data["message_id"],
+        "is_serial": False,
+        "views": 0
+    })
+
+    try:
+        await bot.send_message(video_data["user_id"], f"✅ Siz yuborgan kino tasdiqlandi!\nKod: {code}")
+    except:
+        pass
+
+    base_channel = get_base_channel()
+    if base_channel:
+        try:
+            await bot.copy_message(
+                chat_id=base_channel,
+                from_chat_id=video_data["chat_id"],
+                message_id=video_data["message_id"],
+                caption=f"✅ {video_data.get('caption', 'Kino')}\n\nKod: {code}"
+            )
+        except Exception as e:
+            print(f"Baza kanalga xato: {e}")
+
+    pending_videos_col.delete_one({"_id": video_data["_id"]})
+    await callback.message.edit_text("✅ Kino tasdiqlandi!")
+
+@dp.callback_query_handler(lambda c: c.data.startswith("reject_"))
+async def reject_video(callback: types.CallbackQuery):
+    try:
+        message_id = int(callback.data.split("_")[1])
+    except:
+        await callback.answer("Xato ID!")
+        return
+
+    video_data = pending_videos_col.find_one({"message_id": message_id})
+    if video_
+        pending_videos_col.delete_one({"_id": video_data["_id"]})
+        try:
+            await bot.send_message(video_data["user_id"], "❌ Siz yuborgan kino rad etildi.")
+        except:
+            pass
+    await callback.message.edit_text("❌ Kino rad etildi.")
 # ======================================
 # Umumiy "Orqaga"
 # ======================================
