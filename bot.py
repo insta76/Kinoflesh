@@ -294,7 +294,7 @@ async def handle_user_video_or_back(message: types.Message, state: FSMContext):
             await bot.forward_message(admin_id, message.chat.id, message.message_id)
         except Exception as e:
             print(f"Admin {admin_id} ga xabar yuborishda xato: {e}")
-        )
+            
         await bot.forward_message(admin_id, message.chat.id, message.message_id)
     except Exception as e:
         print(f"Admin {admin_id} ga xabar yuborishda xato: {e}")
